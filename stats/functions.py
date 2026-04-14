@@ -124,19 +124,59 @@ def payload_for_peudo_seq(pseudo_seq,PACKET_LEN):
     else:
         return file_content.loc[0, 'data'] # TODO: pseudo sequence not within the first expected range
 
-def compute_ber_packet(df_row, PACKET_LEN=32):
+def decode_repetition(payload_bytes, repetition_n, pseudo_seq_len=2):
+    """
+    Majority-vote decoder for repetition coding.
+
+    The first `pseudo_seq_len` bytes are the pseudo-sequence index and are
+    NOT repetition-coded; they are passed through unchanged.
+    The remaining bytes are groups of `repetition_n` copies of the same byte.
+    Each group is reduced to one byte using bit-wise majority voting:
+      - a bit is set in the output if more than half the copies have it set.
+
+    Args:
+        payload_bytes  : list[int]  – raw received bytes
+        repetition_n   : int        – copies per byte (1 = no coding)
+        pseudo_seq_len : int        – number of leading bytes to leave untouched
+
+    Returns:
+        list[int] – decoded bytes: pseudo_seq + unique data bytes
+    """
+    if repetition_n == 1:
+        return payload_bytes
+
+    prefix = payload_bytes[:pseudo_seq_len]
+    coded  = payload_bytes[pseudo_seq_len:]
+    unique_len = len(coded) // repetition_n
+    decoded = []
+    for i in range(unique_len):
+        copies = coded[i * repetition_n : (i + 1) * repetition_n]
+        result = 0
+        for bit in range(8):
+            votes = sum(1 for b in copies if (b >> bit) & 1)
+            # majority: set bit if strictly more than half the copies agree
+            if votes >= (repetition_n + 1) // 2:
+                result |= (1 << bit)
+        decoded.append(result)
+    return prefix + decoded
+
+
+def compute_ber_packet(df_row, PACKET_LEN=32, repetition_n=1):
     payload = parse_payload(df_row.payload)
+    if repetition_n > 1:
+        payload = decode_repetition(payload, repetition_n)
     pseudoseq = int(((payload[0]<<8) - 0) + payload[1])
-    expected_data = payload_for_peudo_seq(pseudoseq,PACKET_LEN)
-    # compute the bit errors
-    return (compute_bit_errors(payload[2:], expected_data, PACKET_LEN=PACKET_LEN), 8*(2+len(payload[2:]))) # 2+ for pseudo sequence
+    unique_packet_len = PACKET_LEN // repetition_n
+    expected_data = payload_for_peudo_seq(pseudoseq, unique_packet_len)
+    # compute the bit errors (payload[2:] = data after pseudo-seq)
+    return (compute_bit_errors(payload[2:], expected_data, PACKET_LEN=unique_packet_len), 8*(2+len(payload[2:]))) # 2+ for pseudo sequence
 
 # main function to compute the BER for each frame, return both the error statistics dataframe and in total BER for the received data
-def compute_ber(df, PACKET_LEN=32):
+def compute_ber(df, PACKET_LEN=32, repetition_n=1):
     # seq number initialization
     print(f"The total number of packets transmitted by the tag is {df.seq[len(df)-1]+1}.")
     if len(df) > 0:
-        errors,total = zip(*[compute_ber_packet(row,PACKET_LEN) for (_,row) in df.iterrows()])
+        errors,total = zip(*[compute_ber_packet(row, PACKET_LEN, repetition_n) for (_,row) in df.iterrows()])
         return sum(errors)/sum(total)
     else:
         print("Warning, the log-file seems empty.")

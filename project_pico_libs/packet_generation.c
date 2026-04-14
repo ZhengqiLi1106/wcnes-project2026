@@ -60,9 +60,13 @@ uint16_t generate_sample(){
 }
 
 /*
- * fill packet with 16-bit samples
+ * fill packet with 16-bit samples using repetition coding (REPETITION_N copies per byte).
  * include_index: shall the file index be included at the first two byte?
  * length: the length of the buffer which can be filled with data
+ *
+ * Layout (include_index=true, REPETITION_N=3, length=14):
+ *   [pseudo_seq_hi][pseudo_seq_lo][d0][d0][d0][d1][d1][d1][d2][d2][d2][d3][d3][d3]
+ *   -> 2 bytes index + 4 unique data bytes each repeated 3x = 14 bytes
 */
 void generate_data(uint8_t *buffer, uint8_t length, bool include_index) {
     if(length % 2 != 0){
@@ -71,15 +75,35 @@ void generate_data(uint8_t *buffer, uint8_t length, bool include_index) {
 
     uint8_t data_start = 0;
     if(include_index){
-        buffer[0]   = (uint8_t) (file_position >> 8);
+        buffer[0] = (uint8_t) (file_position >> 8);
         buffer[1] = (uint8_t) (file_position & 0x00FF);
         data_start = 2;
     }
-    for (uint8_t i=data_start; i < length; i=i+2) {
+
+#if REPETITION_N == 1
+    /* No repetition coding: fill directly with samples */
+    for (uint8_t i = data_start; i < length; i += 2) {
         uint16_t sample = generate_sample();
         buffer[i]   = (uint8_t) (sample >> 8);
         buffer[i+1] = (uint8_t) (sample & 0x00FF);
     }
+#else
+    /* Repetition coding: generate unique_len bytes, then repeat each REPETITION_N times */
+    uint8_t data_len   = length - data_start;
+    uint8_t unique_len = (data_len / REPETITION_N) & ~1u; /* round down to even (16-bit samples) */
+    uint8_t unique_buf[PAYLOADSIZE];                       /* temporary buffer for unique bytes */
+
+    for (uint8_t i = 0; i < unique_len; i += 2) {
+        uint16_t sample = generate_sample();
+        unique_buf[i]   = (uint8_t) (sample >> 8);
+        unique_buf[i+1] = (uint8_t) (sample & 0x00FF);
+    }
+    for (uint8_t i = 0; i < unique_len; i++) {
+        for (uint8_t n = 0; n < REPETITION_N; n++) {
+            buffer[data_start + i * REPETITION_N + n] = unique_buf[i];
+        }
+    }
+#endif
 }
 
 /* including a header to the packet:

@@ -18,6 +18,11 @@
 #define HEADER_LEN  10 // 8 header + length + seq
 #define buffer_size(x, y) (((x + y) % 4 == 0) ? ((x + y) / 4) : ((x + y) / 4 + 1)) // define the buffer size with ceil((PAYLOADSIZE+HEADER_LEN)/4)
 
+// Repetition coding factor: 1 = no coding (baseline), 2 = Rate-1/2, 3 = Rate-1/3
+#ifndef REPETITION_N
+#define REPETITION_N 3
+#endif
+
 #ifndef MINMAX
 #define MINMAX
 #define max(x, y) (((x) > (y)) ? (x) : (y))
